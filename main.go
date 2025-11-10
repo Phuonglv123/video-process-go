@@ -20,15 +20,15 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	MinIOEndpoint   string
-	MinIOAccessKey  string
-	MinIOSecretKey  string
-	MinIOBucket     string
-	MinIOSecure     bool
-	BackupDir       string
-	ProcessedDir    string
-	LogDir          string
-	Workers         int
+	MinIOEndpoint  string
+	MinIOAccessKey string
+	MinIOSecretKey string
+	MinIOBucket    string
+	MinIOSecure    bool
+	BackupDir      string
+	ProcessedDir   string
+	LogDir         string
+	Workers        int
 }
 
 // ProcessLog represents a single video processing log entry
