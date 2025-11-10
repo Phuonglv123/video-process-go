@@ -116,24 +116,16 @@ docker run --rm \
   video-processor
 ```
 
-Or use docker-compose (create a `docker-compose.yml`):
-
-```yaml
-version: '3.8'
-services:
-  video-processor:
-    build: .
-    volumes:
-      - ./.env:/app/.env
-      - ./logs:/app/logs
-      - ./backup:/app/backup
-      - ./processed:/app/processed
-```
-
-Then run:
+Or use docker-compose:
 
 ```bash
 docker-compose up
+```
+
+Or run in detached mode:
+
+```bash
+docker-compose up -d
 ```
 
 ## Configuration Options

@@ -21,9 +21,12 @@ video-processor
 .env
 
 # Local directories
-backup/
-processed/
-logs/
+backup/*
+!backup/.gitkeep
+processed/*
+!processed/.gitkeep
+logs/*
+!logs/.gitkeep
 
 # IDE
 .vscode/
