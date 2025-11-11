@@ -83,3 +83,36 @@ func TestCreateDirectories(t *testing.T) {
 	os.RemoveAll(config.ProcessedDir)
 	os.RemoveAll(config.LogDir)
 }
+
+func TestLoadConfigWithPathPrefix(t *testing.T) {
+	// Set environment variables for testing
+	os.Setenv("MINIO_ENDPOINT", "test.minio.io")
+	os.Setenv("MINIO_PATH_PREFIX", "videos/subfolder/")
+	os.Setenv("WORKERS", "4")
+
+	config := loadConfig()
+
+	if config.MinIOPathPrefix != "videos/subfolder/" {
+		t.Errorf("Expected path prefix videos/subfolder/, got %s", config.MinIOPathPrefix)
+	}
+
+	// Clean up
+	os.Unsetenv("MINIO_ENDPOINT")
+	os.Unsetenv("MINIO_PATH_PREFIX")
+	os.Unsetenv("WORKERS")
+}
+
+func TestLoadConfigWithEmptyPathPrefix(t *testing.T) {
+	// Set environment variables for testing
+	os.Setenv("MINIO_ENDPOINT", "test.minio.io")
+	// Don't set MINIO_PATH_PREFIX
+
+	config := loadConfig()
+
+	if config.MinIOPathPrefix != "" {
+		t.Errorf("Expected empty path prefix, got %s", config.MinIOPathPrefix)
+	}
+
+	// Clean up
+	os.Unsetenv("MINIO_ENDPOINT")
+}
