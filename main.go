@@ -20,29 +20,29 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	MinIOEndpoint  string
-	MinIOAccessKey string
-	MinIOSecretKey string
-	MinIOBucket    string
-	MinIOSecure    bool
+	MinIOEndpoint   string
+	MinIOAccessKey  string
+	MinIOSecretKey  string
+	MinIOBucket     string
+	MinIOSecure     bool
 	MinIOPathPrefix string
-	BackupDir      string
-	ProcessedDir   string
-	LogDir         string
-	Workers        int
+	BackupDir       string
+	ProcessedDir    string
+	LogDir          string
+	Workers         int
 }
 
 // ProcessLog represents a single video processing log entry
 type ProcessLog struct {
-	File              string    `json:"file"`
+	File               string    `json:"file"`
 	OriginalVideoCodec string    `json:"original_video_codec"`
 	OriginalAudioCodec string    `json:"original_audio_codec"`
-	NewVideoCodec     string    `json:"new_video_codec"`
-	NewAudioCodec     string    `json:"new_audio_codec"`
-	SizeBefore        int64     `json:"size_before"`
-	SizeAfter         int64     `json:"size_after"`
-	ProcessedAt       time.Time `json:"processed_at"`
-	Status            string    `json:"status"`
+	NewVideoCodec      string    `json:"new_video_codec"`
+	NewAudioCodec      string    `json:"new_audio_codec"`
+	SizeBefore         int64     `json:"size_before"`
+	SizeAfter          int64     `json:"size_after"`
+	ProcessedAt        time.Time `json:"processed_at"`
+	Status             string    `json:"status"`
 }
 
 // VideoProcessor handles video processing operations
@@ -348,7 +348,7 @@ func (p *VideoProcessor) processVideo(workerID int, videoKey string) {
 	if !strings.HasSuffix(strings.ToLower(processedPath), ".mp4") {
 		processedPath = strings.TrimSuffix(processedPath, filepath.Ext(processedPath)) + ".mp4"
 	}
-	
+
 	if err := os.MkdirAll(filepath.Dir(processedPath), 0755); err != nil {
 		log.Printf("[Worker %d] ❌ Failed to create processed directory for %s: %v\n", workerID, videoKey, err)
 		p.logProcess(ProcessLog{
@@ -497,7 +497,7 @@ func (p *VideoProcessor) convertToH264(inputPath, outputPath string) error {
 		"-c:v", "libx264",
 		"-c:a", "aac",
 		"-profile:a", "aac_low", // AAC-LC profile
-		"-b:a", "128k",          // Audio bitrate
+		"-b:a", "128k", // Audio bitrate
 		"-movflags", "+faststart", // Optimize for streaming
 		"-f", "mp4", // Force MP4 container format
 		"-y", // Overwrite output file
