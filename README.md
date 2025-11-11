@@ -5,9 +5,11 @@ A Go CLI tool that automatically processes videos stored in MinIO, converting no
 ## Features
 
 - 🔌 **MinIO Integration**: Connects to MinIO object storage to process videos
-- 🎥 **Smart Codec Detection**: Uses `ffprobe` to detect video codecs
-- 🔄 **Automatic Conversion**: Converts non-h264 videos to h264 using `ffmpeg`
-- 📦 **Backup System**: Backs up original videos before processing
+- 🎥 **Smart Codec Detection**: Uses `ffprobe` to detect both video and audio codecs
+- 🔄 **Automatic Conversion**: Converts videos to H.264 (video) and AAC-LC (audio) using `ffmpeg`
+- 📦 **MP4 Container**: Ensures all output videos are in MP4 format
+- 🎯 **Path Filtering**: Optional path prefix filtering to process specific folders
+- 💾 **Backup System**: Backs up original videos before processing
 - 📊 **Detailed Logging**: JSON-formatted logs for all processing operations
 - ⚡ **Parallel Processing**: Multi-threaded worker pool for efficient processing
 - 🐳 **Docker Ready**: Easy deployment with Docker
@@ -66,6 +68,7 @@ MINIO_ACCESS_KEY=YOUR_ACCESS_KEY
 MINIO_SECRET_KEY=YOUR_SECRET_KEY
 MINIO_BUCKET=videos
 MINIO_SECURE=true
+MINIO_PATH_PREFIX=
 
 # Path local
 BACKUP_DIR=./backup
@@ -137,6 +140,7 @@ docker-compose up -d
 | `MINIO_SECRET_KEY` | MinIO secret key | *(required)* |
 | `MINIO_BUCKET` | Bucket name containing videos | `videos` |
 | `MINIO_SECURE` | Use HTTPS (true/false) | `true` |
+| `MINIO_PATH_PREFIX` | Optional path prefix to filter videos (e.g., `videos/2024/`) | *(empty - processes all)* |
 | `BACKUP_DIR` | Local backup directory | `./backup` |
 | `PROCESSED_DIR` | Local processed files directory | `./processed` |
 | `LOG_DIR` | Log files directory | `./logs` |
@@ -145,15 +149,16 @@ docker-compose up -d
 ## How It Works
 
 1. **Initialization**: Loads configuration from `.env` file and connects to MinIO
-2. **Video Discovery**: Lists all video files in the specified bucket (supports: `.mp4`, `.mov`, `.avi`, `.mkv`, `.flv`, `.wmv`)
-3. **Codec Detection**: Uses `ffprobe` to check the video codec of each file
+2. **Video Discovery**: Lists all video files in the specified bucket/path (supports: `.mp4`, `.mov`, `.avi`, `.mkv`, `.flv`, `.wmv`)
+3. **Codec Detection**: Uses `ffprobe` to check both video and audio codecs of each file
 4. **Processing Decision**:
-   - If codec is already `h264`: Skips processing and logs as "skipped"
-   - If codec is not `h264`: Proceeds with conversion
+   - If video codec is already `h264` AND audio codec is `aac`: Skips processing and logs as "skipped"
+   - If either codec needs conversion: Proceeds with conversion
 5. **Conversion Process**:
    - Downloads original video to backup directory
-   - Converts to h264 using `ffmpeg -c:v libx264 -c:a aac`
-   - Uploads processed video back to MinIO (overwrites original)
+   - Converts to H.264 (video) and AAC-LC (audio) with optimized settings
+   - Ensures output is in MP4 container format
+   - Uploads processed video back to MinIO
 6. **Logging**: Records all operations to `logs/process.log` in JSON format
 
 ## Log Format
@@ -163,8 +168,10 @@ Each processed video generates a JSON log entry:
 ```json
 {
   "file": "path/in/bucket.mp4",
-  "original_codec": "hevc",
-  "new_codec": "h264",
+  "original_video_codec": "hevc",
+  "original_audio_codec": "mp3",
+  "new_video_codec": "h264",
+  "new_audio_codec": "aac",
   "size_before": 123456789,
   "size_after": 98765432,
   "processed_at": "2025-11-10T17:00:00Z",
@@ -181,11 +188,11 @@ Each processed video generates a JSON log entry:
 
 ```
 Found 125 videos to process
-[Worker 1] ✅ videos/intro.mp4 OK (h264)
-[Worker 3] ⚠️ videos/demo.mov codec=hevc → processing...
+[Worker 1] ✅ videos/intro.mp4 OK (video: h264, audio: aac)
+[Worker 3] ⚠️ videos/demo.mov video=hevc, audio=aac → processing...
 [Worker 3] ✅ videos/demo.mov converted and uploaded
-[Worker 2] ✅ videos/tutorial.mp4 OK (h264)
-[Worker 5] ⚠️ videos/promo.avi codec=mpeg4 → processing...
+[Worker 2] ✅ videos/tutorial.mp4 OK (video: h264, audio: aac)
+[Worker 5] ⚠️ videos/promo.avi video=mpeg4, audio=mp3 → processing...
 [Worker 5] ✅ videos/promo.avi converted and uploaded
 
 ✅ Completed all tasks (Total: 125, Converted: 43, Skipped: 82, Failed: 0)

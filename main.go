@@ -20,26 +20,29 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	MinIOEndpoint  string
-	MinIOAccessKey string
-	MinIOSecretKey string
-	MinIOBucket    string
-	MinIOSecure    bool
-	BackupDir      string
-	ProcessedDir   string
-	LogDir         string
-	Workers        int
+	MinIOEndpoint   string
+	MinIOAccessKey  string
+	MinIOSecretKey  string
+	MinIOBucket     string
+	MinIOSecure     bool
+	MinIOPathPrefix string
+	BackupDir       string
+	ProcessedDir    string
+	LogDir          string
+	Workers         int
 }
 
 // ProcessLog represents a single video processing log entry
 type ProcessLog struct {
-	File          string    `json:"file"`
-	OriginalCodec string    `json:"original_codec"`
-	NewCodec      string    `json:"new_codec"`
-	SizeBefore    int64     `json:"size_before"`
-	SizeAfter     int64     `json:"size_after"`
-	ProcessedAt   time.Time `json:"processed_at"`
-	Status        string    `json:"status"`
+	File               string    `json:"file"`
+	OriginalVideoCodec string    `json:"original_video_codec"`
+	OriginalAudioCodec string    `json:"original_audio_codec"`
+	NewVideoCodec      string    `json:"new_video_codec"`
+	NewAudioCodec      string    `json:"new_audio_codec"`
+	SizeBefore         int64     `json:"size_before"`
+	SizeAfter          int64     `json:"size_after"`
+	ProcessedAt        time.Time `json:"processed_at"`
+	Status             string    `json:"status"`
 }
 
 // VideoProcessor handles video processing operations
@@ -98,15 +101,16 @@ func loadConfig() *Config {
 	workers, _ := strconv.Atoi(getEnv("WORKERS", "8"))
 
 	return &Config{
-		MinIOEndpoint:  getEnv("MINIO_ENDPOINT", "play.min.io"),
-		MinIOAccessKey: getEnv("MINIO_ACCESS_KEY", ""),
-		MinIOSecretKey: getEnv("MINIO_SECRET_KEY", ""),
-		MinIOBucket:    getEnv("MINIO_BUCKET", "videos"),
-		MinIOSecure:    secure,
-		BackupDir:      getEnv("BACKUP_DIR", "./backup"),
-		ProcessedDir:   getEnv("PROCESSED_DIR", "./processed"),
-		LogDir:         getEnv("LOG_DIR", "./logs"),
-		Workers:        workers,
+		MinIOEndpoint:   getEnv("MINIO_ENDPOINT", "play.min.io"),
+		MinIOAccessKey:  getEnv("MINIO_ACCESS_KEY", ""),
+		MinIOSecretKey:  getEnv("MINIO_SECRET_KEY", ""),
+		MinIOBucket:     getEnv("MINIO_BUCKET", "videos"),
+		MinIOSecure:     secure,
+		MinIOPathPrefix: getEnv("MINIO_PATH_PREFIX", ""),
+		BackupDir:       getEnv("BACKUP_DIR", "./backup"),
+		ProcessedDir:    getEnv("PROCESSED_DIR", "./processed"),
+		LogDir:          getEnv("LOG_DIR", "./logs"),
+		Workers:         workers,
 	}
 }
 
@@ -160,6 +164,7 @@ func (p *VideoProcessor) processAllVideos() error {
 
 	var videos []string
 	objectCh := p.minioClient.ListObjects(ctx, p.config.MinIOBucket, minio.ListObjectsOptions{
+		Prefix:    p.config.MinIOPathPrefix,
 		Recursive: true,
 	})
 
@@ -248,10 +253,10 @@ func (p *VideoProcessor) processVideo(workerID int, videoKey string) {
 	}
 	defer os.Remove(tempProbeFile)
 
-	// Check codec using ffprobe
-	codec, err := p.getVideoCodec(tempProbeFile)
+	// Check video codec using ffprobe
+	videoCodec, err := p.getVideoCodec(tempProbeFile)
 	if err != nil {
-		log.Printf("[Worker %d] ⚠️ Failed to probe %s: %v\n", workerID, videoKey, err)
+		log.Printf("[Worker %d] ⚠️ Failed to probe video codec for %s: %v\n", workerID, videoKey, err)
 		p.logProcess(ProcessLog{
 			File:        videoKey,
 			SizeBefore:  objInfo.Size,
@@ -264,17 +269,37 @@ func (p *VideoProcessor) processVideo(workerID int, videoKey string) {
 		return
 	}
 
-	// If codec is already h264, skip
-	if strings.ToLower(codec) == "h264" {
-		log.Printf("[Worker %d] ✅ %s OK (h264)\n", workerID, videoKey)
+	// Check audio codec using ffprobe
+	audioCodec, err := p.getAudioCodec(tempProbeFile)
+	if err != nil {
+		log.Printf("[Worker %d] ⚠️ Failed to probe audio codec for %s: %v\n", workerID, videoKey, err)
+		// Don't fail completely, just log warning and continue
+		audioCodec = "unknown"
+	}
+
+	// Determine if conversion is needed
+	needsConversion := false
+	if strings.ToLower(videoCodec) != "h264" {
+		needsConversion = true
+	}
+	// Check if audio needs conversion (not AAC)
+	if audioCodec != "" && strings.ToLower(audioCodec) != "aac" {
+		needsConversion = true
+	}
+
+	// If both codecs are already correct, skip
+	if !needsConversion {
+		log.Printf("[Worker %d] ✅ %s OK (video: h264, audio: %s)\n", workerID, videoKey, audioCodec)
 		p.logProcess(ProcessLog{
-			File:          videoKey,
-			OriginalCodec: codec,
-			NewCodec:      "h264",
-			SizeBefore:    objInfo.Size,
-			SizeAfter:     objInfo.Size,
-			ProcessedAt:   time.Now(),
-			Status:        "skipped",
+			File:               videoKey,
+			OriginalVideoCodec: videoCodec,
+			OriginalAudioCodec: audioCodec,
+			NewVideoCodec:      "h264",
+			NewAudioCodec:      "aac",
+			SizeBefore:         objInfo.Size,
+			SizeAfter:          objInfo.Size,
+			ProcessedAt:        time.Now(),
+			Status:             "skipped",
 		})
 		p.stats.Lock()
 		p.stats.skipped++
@@ -282,18 +307,19 @@ func (p *VideoProcessor) processVideo(workerID int, videoKey string) {
 		return
 	}
 
-	log.Printf("[Worker %d] ⚠️ %s codec=%s → processing...\n", workerID, videoKey, codec)
+	log.Printf("[Worker %d] ⚠️ %s video=%s, audio=%s → processing...\n", workerID, videoKey, videoCodec, audioCodec)
 
 	// Download to backup
 	backupPath := filepath.Join(p.config.BackupDir, videoKey)
 	if err := os.MkdirAll(filepath.Dir(backupPath), 0755); err != nil {
 		log.Printf("[Worker %d] ❌ Failed to create backup directory for %s: %v\n", workerID, videoKey, err)
 		p.logProcess(ProcessLog{
-			File:          videoKey,
-			OriginalCodec: codec,
-			SizeBefore:    objInfo.Size,
-			ProcessedAt:   time.Now(),
-			Status:        "failed",
+			File:               videoKey,
+			OriginalVideoCodec: videoCodec,
+			OriginalAudioCodec: audioCodec,
+			SizeBefore:         objInfo.Size,
+			ProcessedAt:        time.Now(),
+			Status:             "failed",
 		})
 		p.stats.Lock()
 		p.stats.failed++
@@ -304,11 +330,12 @@ func (p *VideoProcessor) processVideo(workerID int, videoKey string) {
 	if err := p.downloadFile(videoKey, backupPath); err != nil {
 		log.Printf("[Worker %d] ❌ Failed to backup %s: %v\n", workerID, videoKey, err)
 		p.logProcess(ProcessLog{
-			File:          videoKey,
-			OriginalCodec: codec,
-			SizeBefore:    objInfo.Size,
-			ProcessedAt:   time.Now(),
-			Status:        "failed",
+			File:               videoKey,
+			OriginalVideoCodec: videoCodec,
+			OriginalAudioCodec: audioCodec,
+			SizeBefore:         objInfo.Size,
+			ProcessedAt:        time.Now(),
+			Status:             "failed",
 		})
 		p.stats.Lock()
 		p.stats.failed++
@@ -316,16 +343,21 @@ func (p *VideoProcessor) processVideo(workerID int, videoKey string) {
 		return
 	}
 
-	// Convert video
+	// Convert video - ensure output is .mp4
 	processedPath := filepath.Join(p.config.ProcessedDir, videoKey)
+	if !strings.HasSuffix(strings.ToLower(processedPath), ".mp4") {
+		processedPath = strings.TrimSuffix(processedPath, filepath.Ext(processedPath)) + ".mp4"
+	}
+
 	if err := os.MkdirAll(filepath.Dir(processedPath), 0755); err != nil {
 		log.Printf("[Worker %d] ❌ Failed to create processed directory for %s: %v\n", workerID, videoKey, err)
 		p.logProcess(ProcessLog{
-			File:          videoKey,
-			OriginalCodec: codec,
-			SizeBefore:    objInfo.Size,
-			ProcessedAt:   time.Now(),
-			Status:        "failed",
+			File:               videoKey,
+			OriginalVideoCodec: videoCodec,
+			OriginalAudioCodec: audioCodec,
+			SizeBefore:         objInfo.Size,
+			ProcessedAt:        time.Now(),
+			Status:             "failed",
 		})
 		p.stats.Lock()
 		p.stats.failed++
@@ -336,11 +368,12 @@ func (p *VideoProcessor) processVideo(workerID int, videoKey string) {
 	if err := p.convertToH264(backupPath, processedPath); err != nil {
 		log.Printf("[Worker %d] ❌ Failed to convert %s: %v\n", workerID, videoKey, err)
 		p.logProcess(ProcessLog{
-			File:          videoKey,
-			OriginalCodec: codec,
-			SizeBefore:    objInfo.Size,
-			ProcessedAt:   time.Now(),
-			Status:        "failed",
+			File:               videoKey,
+			OriginalVideoCodec: videoCodec,
+			OriginalAudioCodec: audioCodec,
+			SizeBefore:         objInfo.Size,
+			ProcessedAt:        time.Now(),
+			Status:             "failed",
 		})
 		p.stats.Lock()
 		p.stats.failed++
@@ -355,17 +388,25 @@ func (p *VideoProcessor) processVideo(workerID int, videoKey string) {
 		processedInfo = nil
 	}
 
+	// Update videoKey to .mp4 if it was changed
+	uploadKey := videoKey
+	if !strings.HasSuffix(strings.ToLower(videoKey), ".mp4") {
+		uploadKey = strings.TrimSuffix(videoKey, filepath.Ext(videoKey)) + ".mp4"
+	}
+
 	// Upload back to MinIO
-	if err := p.uploadFile(processedPath, videoKey); err != nil {
-		log.Printf("[Worker %d] ❌ Failed to upload %s: %v\n", workerID, videoKey, err)
+	if err := p.uploadFile(processedPath, uploadKey); err != nil {
+		log.Printf("[Worker %d] ❌ Failed to upload %s: %v\n", workerID, uploadKey, err)
 		p.logProcess(ProcessLog{
-			File:          videoKey,
-			OriginalCodec: codec,
-			NewCodec:      "h264",
-			SizeBefore:    objInfo.Size,
-			SizeAfter:     processedInfo.Size(),
-			ProcessedAt:   time.Now(),
-			Status:        "failed",
+			File:               uploadKey,
+			OriginalVideoCodec: videoCodec,
+			OriginalAudioCodec: audioCodec,
+			NewVideoCodec:      "h264",
+			NewAudioCodec:      "aac",
+			SizeBefore:         objInfo.Size,
+			SizeAfter:          processedInfo.Size(),
+			ProcessedAt:        time.Now(),
+			Status:             "failed",
 		})
 		p.stats.Lock()
 		p.stats.failed++
@@ -378,15 +419,17 @@ func (p *VideoProcessor) processVideo(workerID int, videoKey string) {
 		sizeAfter = processedInfo.Size()
 	}
 
-	log.Printf("[Worker %d] ✅ %s converted and uploaded\n", workerID, videoKey)
+	log.Printf("[Worker %d] ✅ %s converted and uploaded\n", workerID, uploadKey)
 	p.logProcess(ProcessLog{
-		File:          videoKey,
-		OriginalCodec: codec,
-		NewCodec:      "h264",
-		SizeBefore:    objInfo.Size,
-		SizeAfter:     sizeAfter,
-		ProcessedAt:   time.Now(),
-		Status:        "success",
+		File:               uploadKey,
+		OriginalVideoCodec: videoCodec,
+		OriginalAudioCodec: audioCodec,
+		NewVideoCodec:      "h264",
+		NewAudioCodec:      "aac",
+		SizeBefore:         objInfo.Size,
+		SizeAfter:          sizeAfter,
+		ProcessedAt:        time.Now(),
+		Status:             "success",
 	})
 	p.stats.Lock()
 	p.stats.converted++
@@ -424,11 +467,39 @@ func (p *VideoProcessor) getVideoCodec(videoPath string) (string, error) {
 	return codec, nil
 }
 
+func (p *VideoProcessor) getAudioCodec(videoPath string) (string, error) {
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-select_streams", "a:0",
+		"-show_entries", "stream=codec_name",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		videoPath,
+	)
+
+	output, err := cmd.Output()
+	if err != nil {
+		// No audio stream might not be an error, return empty string
+		return "", nil
+	}
+
+	codec := strings.TrimSpace(string(output))
+	return codec, nil
+}
+
 func (p *VideoProcessor) convertToH264(inputPath, outputPath string) error {
+	// Ensure output is .mp4
+	if !strings.HasSuffix(strings.ToLower(outputPath), ".mp4") {
+		outputPath = strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + ".mp4"
+	}
+
 	cmd := exec.Command("ffmpeg",
 		"-i", inputPath,
 		"-c:v", "libx264",
 		"-c:a", "aac",
+		"-profile:a", "aac_low", // AAC-LC profile
+		"-b:a", "128k", // Audio bitrate
+		"-movflags", "+faststart", // Optimize for streaming
+		"-f", "mp4", // Force MP4 container format
 		"-y", // Overwrite output file
 		outputPath,
 	)
